@@ -1,118 +1,345 @@
-import Image from 'next/image'
-import { Inter } from 'next/font/google'
+import { trpc } from "../utils/trpc";
+import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
+//import { signIn, signOut, useSession } from 'next-auth/react';
+import Head from "next/head";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-const inter = Inter({ subsets: ['latin'] })
+function AddMessageForm({ onMessagePost }: { onMessagePost: () => void }) {
+  const addPost = trpc.post.add.useMutation();
+  //const { data: session } = useSession();
+  const session = { user: { name: "justin" } };
+  const [message, setMessage] = useState("");
+  const [enterToPostMessage, setEnterToPostMessage] = useState(true);
+  async function postMessage() {
+    const input = {
+      text: message,
+    };
+    try {
+      await addPost.mutateAsync(input);
+      setMessage("");
+      onMessagePost();
+    } catch {}
+  }
 
-export default function Home() {
-  return (
-    <main
-      className={`flex min-h-screen flex-col items-center justify-between p-24 ${inter.className}`}
-    >
-      <div className="z-10 w-full max-w-5xl items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/pages/index.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+  const isTyping = trpc.post.isTyping.useMutation();
+
+  const userName = session?.user?.name;
+  if (!userName) {
+    return (
+      <div className="flex w-full justify-between rounded bg-gray-800 px-3 py-2 text-lg text-gray-200">
+        <p className="font-bold">
+          You have to{" "}
+          <button
+            className="inline font-bold underline"
+            //onClick={() => signIn()}
           >
-            By{' '}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
+            sign in
+          </button>{" "}
+          to write.
+        </p>
+        <button
+          //onClick={() => signIn()}
+          data-testid="signin"
+          className="h-full rounded bg-indigo-500 px-4"
+        >
+          Sign In
+        </button>
+      </div>
+    );
+  }
+  return (
+    <>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          /**
+           * In a real app you probably don't want to use this manually
+           * Checkout React Hook Form - it works great with tRPC
+           * @link https://react-hook-form.com/
+           */
+          await postMessage();
+        }}
+      >
+        <fieldset disabled={addPost.isLoading} className="min-w-0">
+          <div className="flex w-full items-end rounded bg-gray-500 px-3 py-2 text-lg text-gray-200">
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              className="flex-1 bg-transparent outline-0"
+              rows={message.split(/\r|\n/).length}
+              id="text"
+              name="text"
+              autoFocus
+              onKeyDown={async (e) => {
+                if (e.key === "Shift") {
+                  setEnterToPostMessage(false);
+                }
+                if (e.key === "Enter" && enterToPostMessage) {
+                  void postMessage();
+                }
+                isTyping.mutate({ typing: true });
+              }}
+              onKeyUp={(e) => {
+                if (e.key === "Shift") {
+                  setEnterToPostMessage(true);
+                }
+              }}
+              onBlur={() => {
+                setEnterToPostMessage(true);
+                isTyping.mutate({ typing: false });
+              }}
             />
-          </a>
+            <div>
+              <button type="submit" className="rounded bg-indigo-500 px-4 py-1">
+                Submit
+              </button>
+            </div>
+          </div>
+        </fieldset>
+        {addPost.error && (
+          <p style={{ color: "red" }}>{addPost.error.message}</p>
+        )}
+      </form>
+    </>
+  );
+}
+
+export default function IndexPage() {
+  const postsQuery = trpc.post.infinite.useInfiniteQuery(
+    {},
+    {
+      getPreviousPageParam: (d) => d.prevCursor,
+    }
+  );
+  const utils = trpc.useContext();
+  const { hasPreviousPage, isFetchingPreviousPage, fetchPreviousPage } =
+    postsQuery;
+
+  // list of messages that are rendered
+  const [messages, setMessages] = useState(() => {
+    const msgs = postsQuery.data?.pages.map((page) => page.items).flat();
+    return msgs;
+  });
+  type Post = NonNullable<typeof messages>[number];
+  //const { data: session } = useSession();
+  //const userName = session?.user?.name;
+  const userName = "justin";
+  const scrollTargetRef = useRef<HTMLDivElement>(null);
+
+  // fn to add and dedupe new messages onto state
+  const addMessages = useCallback((incoming?: Post[]) => {
+    setMessages((current) => {
+      const map: Record<Post["id"], Post> = {};
+      for (const msg of current ?? []) {
+        map[msg.id] = msg;
+      }
+      for (const msg of incoming ?? []) {
+        map[msg.id] = msg;
+      }
+      return Object.values(map).sort(
+        (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
+      );
+    });
+  }, []);
+
+  // when new data from `useInfiniteQuery`, merge with current state
+  useEffect(() => {
+    const msgs = postsQuery.data?.pages.map((page) => page.items).flat();
+    addMessages(msgs);
+  }, [postsQuery.data?.pages, addMessages]);
+
+  const scrollToBottomOfList = useCallback(() => {
+    if (scrollTargetRef.current == null) {
+      return;
+    }
+
+    scrollTargetRef.current.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
+    });
+  }, [scrollTargetRef]);
+  useEffect(() => {
+    scrollToBottomOfList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // subscribe to new posts and add
+  trpc.post.onAdd.useSubscription(undefined, {
+    onData(post) {
+      addMessages([post]);
+    },
+    onError(err) {
+      console.error("Subscription error:", err);
+      // we might have missed a message - invalidate cache
+      utils.post.infinite.invalidate();
+    },
+  });
+
+  const [currentlyTyping, setCurrentlyTyping] = useState<string[]>([]);
+  trpc.post.whoIsTyping.useSubscription(undefined, {
+    onData(data) {
+      setCurrentlyTyping(data);
+    },
+  });
+
+  return (
+    <>
+      <Head>
+        <title>Prisma Starter</title>
+        <link rel="icon" href="/favicon.ico" />
+      </Head>
+      <div className="flex h-screen flex-col md:flex-row">
+        <section className="flex w-full flex-col bg-gray-800 md:w-72">
+          <div className="flex-1 overflow-y-hidden">
+            <div className="flex h-full flex-col divide-y divide-gray-700">
+              <header className="p-4">
+                <h1 className="text-3xl font-bold text-gray-50">
+                  tRPC WebSocket starter
+                </h1>
+                <p className="text-sm text-gray-400">
+                  Showcases WebSocket + subscription support
+                  <br />
+                  <a
+                    className="text-gray-100 underline"
+                    href="https://github.com/trpc/examples-next-prisma-starter-websockets"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View Source on GitHub
+                  </a>
+                </p>
+              </header>
+              <div className="hidden flex-1 space-y-6 overflow-y-auto p-4 text-gray-400 md:block">
+                <article className="space-y-2">
+                  <h2 className="text-lg text-gray-200">Introduction</h2>
+                  <ul className="list-inside list-disc space-y-2">
+                    <li>Open inspector and head to Network tab</li>
+                    <li>All client requests are handled through WebSockets</li>
+                    <li>
+                      We have a simple backend subscription on new messages that
+                      adds the newly added message to the current state
+                    </li>
+                  </ul>
+                </article>
+                {userName && (
+                  <article>
+                    <h2 className="text-lg text-gray-200">User information</h2>
+                    <ul className="space-y-2">
+                      <li className="text-lg">
+                        You&apos;re{" "}
+                        <input
+                          id="name"
+                          name="name"
+                          type="text"
+                          disabled
+                          className="bg-transparent"
+                          value={userName}
+                        />
+                      </li>
+                      <li>
+                        <button
+                        //</li>onClick={() => signOut()}
+                        >
+                          Sign Out
+                        </button>
+                      </li>
+                    </ul>
+                  </article>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="hidden h-16 shrink-0 md:block"></div>
+        </section>
+        <div className="flex-1 overflow-y-hidden md:h-screen">
+          <section className="flex h-full flex-col justify-end space-y-4 bg-gray-700 p-4">
+            <div className="space-y-4 overflow-y-auto">
+              <button
+                data-testid="loadMore"
+                onClick={() => fetchPreviousPage()}
+                disabled={!hasPreviousPage || isFetchingPreviousPage}
+                className="rounded bg-indigo-500 px-4 py-2 text-white disabled:opacity-40"
+              >
+                {isFetchingPreviousPage
+                  ? "Loading more..."
+                  : hasPreviousPage
+                  ? "Load More"
+                  : "Nothing more to load"}
+              </button>
+              <div className="space-y-4">
+                {messages?.map((item) => (
+                  <article key={item.id} className=" text-gray-50">
+                    <header className="flex space-x-2 text-sm">
+                      <h3 className="text-base">
+                        {item.source === "RAW" ? (
+                          item.name
+                        ) : (
+                          <a
+                            href={`https://github.com/${item.name}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {item.name}
+                          </a>
+                        )}
+                      </h3>
+                      <span className="text-gray-500">
+                        {new Intl.DateTimeFormat("en-GB", {
+                          dateStyle: "short",
+                          timeStyle: "short",
+                        }).format(item.createdAt)}
+                      </span>
+                    </header>
+                    <p className="whitespace-pre-line text-xl leading-tight">
+                      {item.text}
+                    </p>
+                  </article>
+                ))}
+                <div ref={scrollTargetRef}></div>
+              </div>
+            </div>
+            <div className="w-full">
+              <AddMessageForm onMessagePost={() => scrollToBottomOfList()} />
+              <p className="h-2 italic text-gray-400">
+                {currentlyTyping.length
+                  ? `${currentlyTyping.join(", ")} typing...`
+                  : ""}
+              </p>
+            </div>
+
+            {process.env.NODE_ENV !== "production" && (
+              <div className="hidden md:block">
+                <ReactQueryDevtools initialIsOpen={false} />
+              </div>
+            )}
+          </section>
         </div>
       </div>
-
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700/10 after:dark:from-sky-900 after:dark:via-[#0141ff]/40 before:lg:h-[360px]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Discover and deploy boilerplate example Next.js&nbsp;projects.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
-    </main>
-  )
+    </>
+  );
 }
+
+/**
+ * If you want to statically render this page
+ * - Export `appRouter` & `createContext` from [trpc].ts
+ * - Make the `opts` object optional on `createContext()`
+ *
+ * @link https://trpc.io/docs/ssg
+ */
+// export const getStaticProps = async (
+//   context: GetStaticPropsContext<{ filter: string }>,
+// ) => {
+//   const ssg = createSSGHelpers({
+//     router: appRouter,
+//     ctx: await createContext(),
+//   });
+//
+//   await ssg.fetchQuery('post.all');
+//
+//   return {
+//     props: {
+//       trpcState: ssg.dehydrate(),
+//       filter: context.params?.filter ?? 'all',
+//     },
+//     revalidate: 1,
+//   };
+// };
